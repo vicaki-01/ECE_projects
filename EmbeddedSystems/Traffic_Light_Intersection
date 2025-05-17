@@ -1,0 +1,236 @@
+// ***** 0. Documentation Section *****
+// TableTrafficLight.c for Lab 10
+// Runs on LM4F120/TM4C123
+// Index implementation of a Moore finite state machine to operate a traffic light.  
+// Daniel Valvano, Jonathan Valvano
+// January 15, 2016
+ 
+// east/west red light connected to PB5
+// east/west yellow light connected to PB4
+// east/west green light connected to PB3
+// north/south facing red light connected to PB2
+// north/south facing yellow light connected to PB1
+// north/south facing green light connected to PB0
+// pedestrian detector connected to PE2 (1=pedestrian present)
+// north/south car detector connected to PE1 (1=car present)
+// east/west car detector connected to PE0 (1=car present)
+// "walk" light connected to PF3 (built-in green LED)
+// "don't walk" light connected to PF1 (built-in red LED)
+ 
+/*
+// ***** 1. Pre-processor Directives Section *****
+#include "TExaS.h"
+#include "tm4c123gh6pm.h"
+ 
+// ***** 2. Global Declarations Section *****
+ 
+// FUNCTION PROTOTYPES: Each subroutine defined
+void DisableInterrupts(void); // Disable interrupts
+void EnableInterrupts(void);  // Enable interrupts
+ 
+// ***** 3. Subroutines Section *****
+ 
+int main(void){ 
+  TExaS_Init(SW_PIN_PE210, LED_PIN_PB543210,ScopeOff); // activate grader and set system clock to 80 MHz
+
+  EnableInterrupts();
+  while(1){
+  }
+}
+*/
+ 
+ 
+ 
+ 
+// ***** 0. Documentation Section *****
+ 
+// TableTrafficLight.c for Lab 10
+// Runs on LM4F120/TM4C123
+// Index implementation of a Moore finite state machine to operate a traffic light.  
+// Daniel Valvano, Jonathan Valvano
+// January 15, 2016
+ 
+// east/west red light connected to PB5
+// east/west yellow light connected to PB4
+// east/west green light connected to PB3
+// north/south facing red light connected to PB2
+// north/south facing yellow light connected to PB1
+// north/south facing green light connected to PB0
+// pedestrian detector connected to PE2 (1=pedestrian present)
+// north/south car detector connected to PE1 (1=car present)
+// east/west car detector connected to PE0 (1=car present)
+// "walk" light connected to PF3 (built-in green LED)
+// "don't walk" light connected to PF1 (built-in red LED)
+ 
+ 
+// ***** 1. Pre-processor Directives Section *****
+#include "TExaS.h"
+ 
+#include "tm4c123gh6pm.h"
+// ***** 2. Global Declarations Section *****
+ 
+void PortB_Init(void);
+void PortE_Init(void);
+void PortF_Init(void);
+void SysTick_Init(void);
+void SysTick_Wait10ms(unsigned long delay);
+extern void EnableInterrupts(void);
+extern void DisableInterrupts(void);
+// ---------- FSM Data Structure -----------
+ 
+struct State {
+  unsigned long PB_Out;    // bits 5..0 for traffic
+  unsigned long PF_Out;    // bits 3,1 for walk
+  unsigned long Time;      // in 10ms increments
+  unsigned long Next[8];   // next state for inputs=0..7
+};
+ 
+typedef const struct State ST_t;
+ 
+#define Wgo    0
+#define Wwait  1
+#define Sgo    2
+#define Swait  3
+#define WalkG  4
+#define Hurry1 5
+#define Off1   6
+#define Hurry2 7
+#define Off2   8
+ 
+ 
+// pedestrian detector connected to PE2 (1=pedestrian present)
+// north/south car detector connected to PE1 (1=car present)
+// east/west car detector connected to PE0 (1=car present)
+ST_t FSM[9] = {
+  // 0) Wgo: WestGreen=PB3=1, SouthRed=PB2=1 => PB=0x0C, PF=0x02 => don't walk
+  // Time=50 => 0.5s, 
+  // Next: stay in Wgo if only west/no inputs; else Wwait if south or walk
+  {//00001100, 00000010
+    0x0C, 0x02, 50,
+    {Wgo, Wgo, Wwait, Wwait, Wwait, Wwait, Wwait, Wwait}
+  },
+  // 1) Wwait: WestYellow=PB4=1 + SouthRed=PB2=1 => PB=0x14, PF=0x02 => 0.5s
+  // always go Sgo
+  {//00010100, 00000010
+    0x14, 0x02, 50,
+    {Sgo, Sgo, Sgo, Sgo, Sgo, Sgo, Sgo, Sgo}
+  },
+  // 2) Sgo: SouthGreen=PB0=1 + WestRed=PB5=1 => 0x21, PF=0x02 => 0.5s
+  // stay if only south/no inputs, else Swait
+  {//00100001, 00000010
+    0x21, 0x02, 50,
+    {Sgo,   Swait, Sgo, Swait, Swait, Swait, Swait, Swait}
+  },
+  // 3) Swait: SouthYellow=PB1=1 + WestRed=PB5=1 => 0x22, PF=0x02 => 0.5s
+  // if walk, go WalkG; else back to Wgo
+  {//00100010, 00000010
+    0x22, 0x02, 50,
+    {Wgo,  Wgo,  Wgo,  Wgo, WalkG, WalkG, WalkG, WalkG}
+  },
+  // 4) WalkG: PB=both red =>0x24, PF=bit3=1 =>0x08 => 0.5s
+  // next => Hurry1
+  {//00100100, 00001000
+    0x24, 0x08, 50,
+    {Hurry1, Hurry1, Hurry1, Hurry1, Hurry1, Hurry1, Hurry1, Hurry1}
+  },
+  // 5) Hurry1 => PB=both red=0x24, PF=don'twalk=0x02 => 0.25s => Off1
+  {//00100100, 00000010
+    0x24, 0x02, 25,
+    {Off1, Off1, Off1, Off1, Off1, Off1, Off1, Off1}
+  },
+  // 6) Off1 => PB=0x24, PF=0 => 0.25s => Hurry2
+  {//00100100, 00000000
+    0x24, 0x00, 25,
+    {Hurry2, Hurry2, Hurry2, Hurry2, Hurry2, Hurry2, Hurry2, Hurry2}
+  },
+  // 7) Hurry2 => PB=0x24, PF=0x02 => 0.25s => Off2
+  {//00100100, 00000010
+    0x24, 0x02, 25,
+    {Off2, Off2, Off2, Off2, Off2, Off2, Off2, Off2}
+  },
+  // 8) Off2 => PB=0x24, PF=0 => 0.25 => back to Wgo
+  {//00100100, //00000000
+    0x24, 0x00, 25,
+    {Wgo, Wgo, Wgo, Wgo, Wgo, Wgo, Wgo, Wgo}
+  }
+};
+ 
+// ***** 3. Subroutines Section *****
+ 
+// PF - walk
+// PE - detection
+// PB - Light control
+int main(void){
+  unsigned long S;      // current state index
+  unsigned long input;  // from PE2..PE0
+  TExaS_Init(SW_PIN_PE210, LED_PIN_PB543210, ScopeOff);
+  SysTick_Init();
+  PortB_Init();
+  PortE_Init();
+  PortF_Init();
+  S = Wgo;     // Start state
+  EnableInterrupts();
+  while(1){
+    // 1) Output
+    GPIO_PORTB_DATA_R = FSM[S].PB_Out;
+    GPIO_PORTF_DATA_R = FSM[S].PF_Out;
+    // 2) Wait
+    SysTick_Wait10ms(FSM[S].Time);
+    // 3) Read inputs from PE2..PE0
+    input = (GPIO_PORTE_DATA_R & 0x07);
+    // 4) Next state
+    S = FSM[S].Next[input];
+  }
+}
+// ---------------- SysTick & Port Init Routines ----------------
+ 
+void SysTick_Init(void){
+  NVIC_ST_CTRL_R = 0;
+  NVIC_ST_RELOAD_R = 0x00FFFFFF;
+  NVIC_ST_CTRL_R = 0x05; // enable, core clock
+}
+void SysTick_Wait10ms(unsigned long delay){
+  unsigned long i;
+  while(delay>0){
+    i = 800000;       // ~10ms @80MHz
+    NVIC_ST_RELOAD_R = i - 1;
+		// wait for systick to overflow
+    while((NVIC_ST_CTRL_R & 0x10000)==0){}
+    delay--;
+  }
+}
+void PortB_Init(void){
+  volatile unsigned long delay;
+  SYSCTL_RCGC2_R |= 0x02;
+  delay = SYSCTL_RCGC2_R;
+  GPIO_PORTB_AMSEL_R= 0;
+  GPIO_PORTB_PCTL_R = 0;
+  GPIO_PORTB_DIR_R  = 0x3F; // PB5..PB0 out
+  GPIO_PORTB_AFSEL_R= 0;
+  GPIO_PORTB_DEN_R  = 0x3F;
+}
+void PortE_Init(void){
+  volatile unsigned long delay;
+  SYSCTL_RCGC2_R |= 0x10;
+  delay = SYSCTL_RCGC2_R;
+  GPIO_PORTE_AMSEL_R&= ~0x07;
+  GPIO_PORTE_PCTL_R &= ~0xFFF;
+  GPIO_PORTE_DIR_R  &= ~0x07;
+  GPIO_PORTE_AFSEL_R&= ~0x07;
+  GPIO_PORTE_DEN_R  |=  0x07;
+}
+void PortF_Init(void){
+  volatile unsigned long delay;
+  SYSCTL_RCGC2_R |= 0x20;
+  delay = SYSCTL_RCGC2_R;
+  GPIO_PORTF_LOCK_R= 0x4C4F434B;
+  GPIO_PORTF_CR_R  = 0x1F;
+  GPIO_PORTF_AMSEL_R=0;
+  GPIO_PORTF_PCTL_R=0;
+  // PF3,1 => out
+  GPIO_PORTF_DIR_R |= 0x0A;
+  GPIO_PORTF_AFSEL_R&= ~0x0A;
+  GPIO_PORTF_DEN_R |= 0x0A;
+ 
+}
+ 
